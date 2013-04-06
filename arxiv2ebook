@@ -1,0 +1,174 @@
+#!/bin/bash
+# Requires wget, gunzip, bc, perl, latexmk
+
+# Ratio of the actual viewport
+# Some useful information is available at http://goo.gl/7Yvbc
+RATIO=`echo "800 / 572" | bc -l`
+
+# Minimal width (mm) of the output document
+# If formulas appear to be longer, 
+# this value will be increased automatically
+WIDTH=90
+
+# Margins (mm)
+MARGIN=2
+
+# Maximum number of runs 
+# Script reruns with increased dimensions if it founds overfulls, 
+# but if sizes of blocks are relative to page's ones, it may cycle forever
+# Usually two runs are enough to get rid of all horizontal overfulls
+MAX_RUN_NUMBER=2
+
+# Set USE_BREQN=1 to use package "breqn" to hyphen formulas
+# This package cause problems in some cases
+USE_BREQN=0
+
+# One can derive the following list of classes by running
+# find -iname "*.cls" | xargs grep -l {geometry} | cut -d "/" -f 3 | cut -d . -f 1 | sort | paste -s -d "|"
+# Additions and fixes are welcome
+CLASSES_WITH_GEOMETRY="achemso|active-conf|agecon|aiaa-tc|ajae|apecon|bookest|ebsthesis|ecca|ecv|elpres|elsarticle|erae|erdc|eskd|estcpmm|flacards|flashcards|gaceta|gmdocc|hpsdiss|icsv|IEEEconf|image-gallery|isodoc|itaxpf|jrurstud|kerntest|lps|macqassign|mentis|nih|oegatb|papertex|pbsheet|pocoec|postcards|powerdot|ppr-prv|recipecard|regstud|sageep|screenplay|sffms|umich-thesis|vxulicentiate|worlddev"
+
+# Current number of runs
+RUN_NUMBER=0
+
+compile(){
+  TEXNAME=$1
+
+	# Add (if not added already) geometry to preambule 
+	if grep -q -E "\\documentclass(\[[^]]*\])?{($CLASSES_WITH_GEOMETRY)}|\\\usepackage(\[[^]]*\])?{[^}]*geometry[^}]*}" $TEXNAME
+	then
+		echo "geometry has been already included" > /dev/null
+	else
+		perl -pi -0 -e "s/\\\begin\{document\}/\\\setlength{\\\paperwidth}{210mm}\\\setlength{\\\paperheight}{297mm}\\\usepackage{geometry}\\\begin{document}/g" $TEXNAME
+	fi
+	
+	# Set up required page's geometry, 
+	# use \sloppy to allow hyphenation without penalties,
+	# suppress \twocolumn and set single line spacing
+	HEIGHT=`echo "$WIDTH / $RATIO" | bc -l`
+	INSERTION="\\\geometry{margin=${MARGIN}mm, papersize={${WIDTH}mm,${HEIGHT}mm}, offset=0mm}
+\\\sloppy
+\\\def\\\twocolumn{}
+\\\renewcommand{\\\twocolumn}[1][]{\\\onecolumn #1}
+\\\renewcommand{\\\baselinestretch}{1}
+"
+	# Insert parameters right before \begin{document}
+	perl -pi -0 -e "s/\\\begin\{document\}/$INSERTION\\\begin{document}/g" $TEXNAME
+	
+	# Remove documentclass option "twocolumn"
+	# For elsarticle replace "3p" or "5p" by "1p"
+	perl -pi -0 -e "s/\\\documentclass\[([^]]*)(3|5)p([^]]*)\]{elsarticle}/\\\documentclass[\$1 1p \$3]{elsarticle}/g" $TEXNAME
+	# For revtex4-1 replace "reprint" or "twocolumn" by "preprint"
+	perl -pi -0 -e "s/\\\documentclass\[((?:[^]]*[^a-z])?)(reprint|twocolumn)([^]]*)\]{revtex4-1}/\\\documentclass[\$1 preprint \$3]{revtex4-1}/g" $TEXNAME
+	# In other cases replace twocolumn by onecolumn
+	perl -pi -0 -e "s/\\\documentclass\[([^]]*)twocolumn([^]]*)\]/\\\documentclass[\$1 onecolumn \$2]/g" $TEXNAME
+
+	if (( $USE_BREQN ))
+	then
+		# Add (if not added already) breqn to preambule 
+		if grep -q -E "\\\usepackage(\[[^]]*\])?{[^}]*breqn[^}]*}" $TEXNAME
+		then
+			echo "breqn has been already included" > /dev/null
+		else
+			perl -pi -0 -e "s/\\\begin\{document\}/\\\usepackage{breqn}\\\begin{document}/g" $TEXNAME
+		fi
+		# Replace equation by dmath
+		perl -pi -0 -e "s/\\\begin\{equation\}/\\\begin{dmath}/g" $TEXNAME
+		perl -pi -0 -e "s/\\\end\{equation\}/\\\end{dmath}/g" $TEXNAME
+		perl -pi -0 -e "s/\\\begin\{equation\*\}/\\\begin{dmath*}/g" $TEXNAME
+		perl -pi -0 -e "s/\\\end\{equation\*\}/\\\end{dmath*}/g" $TEXNAME
+	fi
+
+	# Depending on graphics format 
+	# try to compile in PDF directly 
+	if latexmk -dvi- -ps- -pdf  -bibtex- -silent $TEXNAME
+	then
+	  echo "direct compilation to pdf failed" > /dev/null
+	# or through intermediate PS
+	else
+		latexmk -dvi- -ps- -pdfps -bibtex- $TEXNAME
+	fi
+	
+	# Increase number of runs
+	RUN_NUMBER=$(($RUN_NUMBER + 1))
+	# If we can run once more
+	if [ "$RUN_NUMBER" -lt "$MAX_RUN_NUMBER" ]
+	then
+		# Parse logs to check possible overfulls
+		parselog $TEXNAME
+	fi
+}
+
+parselog(){
+	TEXNAME=$1
+	LOGNAME="${TEXNAME%.*}.log"
+	
+	# If horizontal overfulls exist
+	if grep -q Overfull "$LOGNAME"
+	then 
+		# Select the longest overfull
+		ADDTOWIDTH=`grep Overfull "$LOGNAME" | cut -d "(" -f 2 | cut -d p -f 1 | sort -nr | head -n 1`
+		# Calculate new width 
+		WIDTH=`echo "$WIDTH + $ADDTOWIDTH / 72 * 25.4" | bc -l`
+		# And re-run compile()
+		compile $TEXNAME
+		return
+	fi
+	
+	# If vertical overfulls exist
+	if grep -q "Float too large" "$LOGNAME"
+	then 
+		# Select the longest overfull
+		ADDTOHEIGHT=`grep "Float too large" *.log | cut -d " " -f 9 | cut -d p -f 1 | sort -nr | head -n 1`
+		# Calculate new width 
+		WIDTH=`echo "$WIDTH + $ADDTOHEIGHT * $RATIO / 72 * 25.4" | bc -l`
+		# And re-run compile()
+		compile $TEXNAME
+		return
+	fi
+}
+
+CODE=$1
+OUTPUTDIR=`pwd`
+TMPDIR=`mktemp -d`
+cd $TMPDIR
+
+# Download sources
+USERAGENT="Wget"
+if wget -U"$USERAGENT" -O - http://arxiv.org/e-print/$CODE > $CODE.gz
+then
+	echo "wget success" > /dev/null
+else
+	echo "Cannot download http://arxiv.org/e-print/$CODE"
+	exit
+fi
+
+# Some people does not provide sources of their papers
+if file $CODE.gz | grep -q PDF 
+then
+	echo "No sources available!"
+	exit 
+fi
+
+# Unpack sources
+gunzip -f $CODE.gz
+
+# If sources consist of several files 
+# they are tarred. Untar them
+for i in `file * | grep "POSIX tar archive" | cut -d : -f 1`; do
+	tar -xf $i
+done
+
+# If there is a single file then simply compile it
+if [ `ls -1A | wc -l` = 1 ]; then
+	compile *
+# If there are multiple files 
+# then select LaTeX documents and compile them
+else
+	for i in `grep -l "\\\documentclass\|\\\documentstyle" *.tex`; do 
+		compile $i
+	done
+fi
+
+cp *.pdf $OUTPUTDIR
+rm -rf $TMPDIR
