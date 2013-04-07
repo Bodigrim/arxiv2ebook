@@ -1,9 +1,10 @@
 #!/bin/bash
-# Requires wget, gunzip, bc, perl, latexmk
+# Requires curl and perl
+# latexmk is desirable, but not necessary
 
 # Ratio of the actual viewport
 # Some useful information is available at http://goo.gl/7Yvbc
-RATIO=`echo "800 / 572" | bc -l`
+RATIO=1.3986 # `echo "800 / 572" | bc -l`
 
 # Minimal width (mm) of the output document
 # If formulas appear to be longer, 
@@ -26,26 +27,88 @@ USE_BREQN=0
 # One can derive the following list of classes by running
 # find -iname "*.cls" | xargs grep -l {geometry} | cut -d "/" -f 3 | cut -d . -f 1 | sort | paste -s -d "|"
 # Additions and fixes are welcome
-CLASSES_WITH_GEOMETRY="achemso|active-conf|agecon|aiaa-tc|ajae|apecon|bookest|ebsthesis|ecca|ecv|elpres|elsarticle|erae|erdc|eskd|estcpmm|flacards|flashcards|gaceta|gmdocc|hpsdiss|icsv|IEEEconf|image-gallery|isodoc|itaxpf|jrurstud|kerntest|lps|macqassign|mentis|nih|oegatb|papertex|pbsheet|pocoec|postcards|powerdot|ppr-prv|recipecard|regstud|sageep|screenplay|sffms|umich-thesis|vxulicentiate|worlddev"
+CLASSES_WITH_GEOMETRY="achemso|active-conf|agecon|aiaa-tc|ajae|apecon|bookest|ebsthesis|ecca|ecv|elpres|erae|erdc|eskd|estcpmm|flacards|flashcards|gaceta|gmdocc|hpsdiss|icsv|IEEEconf|image-gallery|isodoc|itaxpf|jrurstud|kerntest|lps|macqassign|mentis|nih|oegatb|papertex|pbsheet|pocoec|postcards|powerdot|ppr-prv|recipecard|regstud|sageep|screenplay|sffms|umich-thesis|vxulicentiate|worlddev"
+# Documentclass elsarticle incorporates geometry only if one of the options 1p, 3p or 5p is set
 
 # Current number of runs
 RUN_NUMBER=0
 
+# Implement floating point arithmetic
+# using various tools
+calc(){
+	if which bc; then
+		CALC_LAST=`echo "$1" | bc -l`
+	elif which awk; then
+		CALC_LAST=`echo - | awk "{print $1}"`
+	elif which perl; then
+		CALC_LAST=`echo "print $1" | perl`
+	elif which python; then
+		CALC_LAST=`python -c "print $1"`
+	elif which ruby; then
+		CALC_LAST=`ruby -e "print $1"`
+	else 
+		echo "No calculator available"
+		exit
+	fi
+	}
+	
+latexmake_pdf(){
+	if which latexmk; then
+		if latexmk -dvi- -ps- -pdf  -bibtex- -silent "$1"; then
+			LATEXMAKE_PDF=0
+		else
+			LATEXMAKE_PDF=1
+		fi
+	else
+		COMMAND="pdflatex -interaction=batchmode "$1""
+		if $COMMAND && $COMMAND && $COMMAND && $COMMAND; then
+			LATEXMAKE_PDF=0
+		else
+			LATEXMAKE_PDF=1
+		fi 
+	fi
+	}
+
+latexmake_pdfps(){
+	if which latexmk; then
+		if latexmk -dvi- -ps- -pdfps -bibtex- "$1"; then
+			LATEXMAKE_PDFPS=0
+		else
+			LATEXMAKE_PDFPS=1
+		fi
+	else
+		TEXNAME=$1
+		DVINAME="${TEXNAME%.*}.dvi"
+		PSNAME="${TEXNAME%.*}.ps"
+
+		COMMAND="latex -interaction=batchmode "$1""
+		if $COMMAND && $COMMAND && $COMMAND && $COMMAND && dvips "$DVINAME" && ps2pdf "$PSNAME"; then
+			LATEXMAKE_PDFPS=0
+		else
+			LATEXMAKE_PDFPS=1
+		fi 
+	fi
+	}
+
 compile(){
   TEXNAME=$1
+  
+  # Strip comments
+  perl -pi -e 's/(?<!\\)%.*/%/g' "$TEXNAME"
 
 	# Add (if not added already) geometry to preambule 
-	if grep -q -E "\\documentclass(\[[^]]*\])?{($CLASSES_WITH_GEOMETRY)}|\\\usepackage(\[[^]]*\])?{[^}]*geometry[^}]*}" $TEXNAME
+	if grep -q -E "\\documentclass(\[[^]]*\])?{($CLASSES_WITH_GEOMETRY)}|\\\usepackage(\[[^]]*\])?{[^}]*geometry[^}]*}|\\documentclass\[([^]]*)(1|3|5)p([^]]*)\]{elsarticle}" "$TEXNAME"
 	then
 		echo "geometry has been already included" > /dev/null
 	else
-		perl -pi -0 -e "s/\\\begin\{document\}/\\\setlength{\\\paperwidth}{210mm}\\\setlength{\\\paperheight}{297mm}\\\usepackage{geometry}\\\begin{document}/g" $TEXNAME
+		perl -pi -0 -e "s/\\\begin\{document\}/\\\setlength{\\\paperwidth}{210mm}\\\setlength{\\\paperheight}{297mm}\\\usepackage{geometry}\\\begin{document}/g" "$TEXNAME"
 	fi
-	
+
 	# Set up required page's geometry, 
 	# use \sloppy to allow hyphenation without penalties,
 	# suppress \twocolumn and set single line spacing
-	HEIGHT=`echo "$WIDTH / $RATIO" | bc -l`
+	calc "$WIDTH / $RATIO"
+	HEIGHT=$CALC_LAST
 	INSERTION="\\\geometry{margin=${MARGIN}mm, papersize={${WIDTH}mm,${HEIGHT}mm}, offset=0mm}
 \\\sloppy
 \\\def\\\twocolumn{}
@@ -53,42 +116,43 @@ compile(){
 \\\renewcommand{\\\baselinestretch}{1}
 "
 	# Insert parameters right before \begin{document}
-	perl -pi -0 -e "s/\\\begin\{document\}/$INSERTION\\\begin{document}/g" $TEXNAME
-	
+	perl -pi -0 -e "s/\\\begin\{document\}/$INSERTION\\\begin{document}/g" "$TEXNAME"
+
 	# Remove documentclass option "twocolumn"
 	# For elsarticle replace "3p" or "5p" by "1p"
-	perl -pi -0 -e "s/\\\documentclass\[([^]]*)(3|5)p([^]]*)\]{elsarticle}/\\\documentclass[\$1 1p \$3]{elsarticle}/g" $TEXNAME
+	perl -pi -0 -e "s/\\\documentclass\[([^]]*)(3|5)p([^]]*)\]{elsarticle}/\\\documentclass[\$1 1p \$3]{elsarticle}/g" "$TEXNAME"
 	# For revtex4-1 replace "reprint" or "twocolumn" by "preprint"
-	perl -pi -0 -e "s/\\\documentclass\[((?:[^]]*[^a-z])?)(reprint|twocolumn)([^]]*)\]{revtex4-1}/\\\documentclass[\$1 preprint \$3]{revtex4-1}/g" $TEXNAME
+	perl -pi -0 -e "s/\\\documentclass\[((?:[^]]*[^a-z])?)(reprint|twocolumn)([^]]*)\]{revtex4-1}/\\\documentclass[\$1 preprint \$3]{revtex4-1}/g" "$TEXNAME"
 	# In other cases replace twocolumn by onecolumn
-	perl -pi -0 -e "s/\\\documentclass\[([^]]*)twocolumn([^]]*)\]/\\\documentclass[\$1 onecolumn \$2]/g" $TEXNAME
+	perl -pi -0 -e "s/\\\documentclass\[([^]]*)twocolumn([^]]*)\]/\\\documentclass[\$1 onecolumn \$2]/g" "$TEXNAME"
 
 	if (( $USE_BREQN ))
 	then
 		# Add (if not added already) breqn to preambule 
-		if grep -q -E "\\\usepackage(\[[^]]*\])?{[^}]*breqn[^}]*}" $TEXNAME
+		if grep -q -E "\\\usepackage(\[[^]]*\])?{[^}]*breqn[^}]*}" "$TEXNAME"
 		then
 			echo "breqn has been already included" > /dev/null
 		else
-			perl -pi -0 -e "s/\\\begin\{document\}/\\\usepackage{breqn}\\\begin{document}/g" $TEXNAME
+			perl -pi -0 -e "s/\\\begin\{document\}/\\\usepackage{breqn}\\\begin{document}/g" "$TEXNAME"
 		fi
 		# Replace equation by dmath
-		perl -pi -0 -e "s/\\\begin\{equation\}/\\\begin{dmath}/g" $TEXNAME
-		perl -pi -0 -e "s/\\\end\{equation\}/\\\end{dmath}/g" $TEXNAME
-		perl -pi -0 -e "s/\\\begin\{equation\*\}/\\\begin{dmath*}/g" $TEXNAME
-		perl -pi -0 -e "s/\\\end\{equation\*\}/\\\end{dmath*}/g" $TEXNAME
+		perl -pi -0 -e "s/\\\begin\{equation\}/\\\begin{dmath}/g" "$TEXNAME"
+		perl -pi -0 -e "s/\\\end\{equation\}/\\\end{dmath}/g" "$TEXNAME"
+		perl -pi -0 -e "s/\\\begin\{equation\*\}/\\\begin{dmath*}/g" "$TEXNAME"
+		perl -pi -0 -e "s/\\\end\{equation\*\}/\\\end{dmath*}/g" "$TEXNAME"
 	fi
 
 	# Depending on graphics format 
 	# try to compile in PDF directly 
-	if latexmk -dvi- -ps- -pdf  -bibtex- -silent $TEXNAME
+	latexmake_pdf $TEXNAME
+	if [ $LATEXMAKE_PDF -eq 0 ]
 	then
-	  echo "direct compilation to pdf failed" > /dev/null
+	  echo "direct compilation to pdf success" > /dev/null
 	# or through intermediate PS
 	else
-		latexmk -dvi- -ps- -pdfps -bibtex- $TEXNAME
+		latexmake_pdfps $TEXNAME
 	fi
-	
+
 	# Increase number of runs
 	RUN_NUMBER=$(($RUN_NUMBER + 1))
 	# If we can run once more
@@ -102,26 +166,28 @@ compile(){
 parselog(){
 	TEXNAME=$1
 	LOGNAME="${TEXNAME%.*}.log"
-	
+
 	# If horizontal overfulls exist
 	if grep -q Overfull "$LOGNAME"
 	then 
 		# Select the longest overfull
 		ADDTOWIDTH=`grep Overfull "$LOGNAME" | cut -d "(" -f 2 | cut -d p -f 1 | sort -nr | head -n 1`
 		# Calculate new width 
-		WIDTH=`echo "$WIDTH + $ADDTOWIDTH / 72 * 25.4" | bc -l`
+		calc "$WIDTH + $ADDTOWIDTH / 72 * 25.4"
+		WIDTH=$CALC_LAST
 		# And re-run compile()
 		compile $TEXNAME
 		return
 	fi
-	
+
 	# If vertical overfulls exist
 	if grep -q "Float too large" "$LOGNAME"
 	then 
 		# Select the longest overfull
 		ADDTOHEIGHT=`grep "Float too large" *.log | cut -d " " -f 9 | cut -d p -f 1 | sort -nr | head -n 1`
 		# Calculate new width 
-		WIDTH=`echo "$WIDTH + $ADDTOHEIGHT * $RATIO / 72 * 25.4" | bc -l`
+		calc "$WIDTH + $ADDTOHEIGHT * $RATIO / 72 * 25.4"
+		WIDTH=$CALC_LAST
 		# And re-run compile()
 		compile $TEXNAME
 		return
@@ -134,24 +200,20 @@ TMPDIR=`mktemp -d`
 cd $TMPDIR
 
 # Download sources
-USERAGENT="Wget"
-if wget -U"$USERAGENT" -O - http://arxiv.org/e-print/$CODE > $CODE.gz
+if curl -o $CODE --compressed http://arxiv.org/e-print/$CODE 
 then
-	echo "wget success" > /dev/null
+	echo "curl success" > /dev/null
 else
 	echo "Cannot download http://arxiv.org/e-print/$CODE"
 	exit
 fi
 
 # Some people does not provide sources of their papers
-if file $CODE.gz | grep -q PDF 
+if file $CODE | grep -q PDF 
 then
 	echo "No sources available!"
 	exit 
 fi
-
-# Unpack sources
-gunzip -f $CODE.gz
 
 # If sources consist of several files 
 # they are tarred. Untar them
