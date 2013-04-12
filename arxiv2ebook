@@ -1,5 +1,6 @@
 #!/bin/bash
-# Requires curl and perl
+# Requires perl
+# Requires one of following: curl, wget, GET, w3m, lynx
 # latexmk is desirable, but not necessary
 
 # Ratio of the actual viewport
@@ -47,11 +48,79 @@ calc(){
 	elif which ruby; then
 		CALC_LAST=`ruby -e "print $1"`
 	else 
-		echo "No calculator available"
+		echo "No calculator available: install bc, awk, perl, python or ruby"
 		exit
 	fi
 	}
 	
+# Download sources using various tools
+download(){
+	URL=$1
+	OUTPUT=$2
+	
+	echo "Downloading $URL to $OUTPUT"
+	
+	if which curl; then
+		if curl -o $OUTPUT --compressed $URL 
+		then
+			echo "curl succeeded" > /dev/null
+		else
+			echo "Cannot download http://arxiv.org/e-print/$CODE"
+			exit
+		fi	
+	else
+		# Check if gunzip available
+		if which gunzip; then
+			echo "gunzip available" > /dev/null
+		else
+			echo "No gunzip available: install curl (preferred) or gunzip"
+		fi
+		
+		# Download $URL using wget, GET, w3m or lynx
+		if which wget; then
+			USERAGENT="Wget"
+			if wget -U"$USERAGENT" -O - $URL > $OUTPUT.gz
+			then
+				echo "wget succeeded" > /dev/null
+			else
+				echo "Cannot download $URL using wget"
+				exit
+			fi
+		elif which GET; then
+			if GET $URL > $OUTPUT.gz
+			then
+				echo "GET succeeded" > /dev/null
+			else
+				echo "Cannot download $URL using GET"
+				exit
+			fi			
+		elif which w3m; then
+			if w3m -dump_source $URL > $OUTPUT.gz
+			then
+				echo "w3m succeeded" > /dev/null
+			else
+				echo "Cannot download $URL using w3m"
+				exit
+			fi			
+		elif which lynx; then
+			if lynx -source $URL > $OUTPUT.gz
+			then
+				echo "lynx succeeded" > /dev/null
+			else
+				echo "Cannot download $URL using lynx"
+				exit
+			fi					
+		else 
+			echo "No downloader available: install curl (preferred), wget, GET, w3m or lynx"
+			exit
+		fi
+
+		# Unpack sources
+		gunzip -f $CODE.gz		
+		
+	fi
+	}
+ 
 latexmake_pdf(){
 	if which latexmk; then
 		if latexmk -dvi- -ps- -pdf  -bibtex- -silent "$1"; then
@@ -92,9 +161,14 @@ latexmake_pdfps(){
 
 compile(){
   TEXNAME=$1
+  echo "Compiling $TEXNAME"
   
   # Strip comments
   perl -pi -e 's/(?<!\\)%.*/%/g' "$TEXNAME"
+  
+  # LaTeX 2.09 documents with no options
+  # can be simply converted to LaTeX2e
+  perl -pi -e "s/\\\documentstyle{/\\\documentclass{/g" "$TEXNAME"
 
 	# Add (if not added already) geometry to preambule 
 	if grep -q -E "\\documentclass(\[[^]]*\])?{($CLASSES_WITH_GEOMETRY)}|\\\usepackage(\[[^]]*\])?{[^}]*geometry[^}]*}|\\documentclass\[([^]]*)(1|3|5)p([^]]*)\]{elsarticle}" "$TEXNAME"
@@ -104,15 +178,39 @@ compile(){
 		perl -pi -0 -e "s/\\\begin\{document\}/\\\setlength{\\\paperwidth}{210mm}\\\setlength{\\\paperheight}{297mm}\\\usepackage{geometry}\\\begin{document}/g" "$TEXNAME"
 	fi
 
+	# Long URLs often produce overfulls
+	# If hyperref is used
+	# then add (if not added already) breakurl to preambule 
+	if grep -q -E "\\\usepackage(\[[^]]*\])?{[^}]*breakurl[^}]*}" "$TEXNAME" 
+	then
+		echo "breakurl has been already included" > /dev/null
+	else
+		if grep -q -E "\\\usepackage(\[[^]]*\])?{[^}]*hyperref[^}]*}" "$TEXNAME"; then 
+			perl -pi -0 -e "s/\\\begin\{document\}/\\\usepackage{breakurl}\\\begin{document}/g" "$TEXNAME"
+		else
+			echo "hyperref is not used" > /dev/null
+		fi
+	fi
+	
+	# On narrow pages more and more floats occur unprocesses
+	# Let us fix this with morefloats
+	if grep -q -E "\\\usepackage(\[[^]]*\])?{[^}]*morefloats[^}]*}" "$TEXNAME" 
+	then
+		echo "morefloats has been already included" > /dev/null
+	else
+		perl -pi -0 -e "s/\\\begin\{document\}/\\\usepackage{morefloats}\\\begin{document}/g" "$TEXNAME"
+	fi
+
 	# Set up required page's geometry, 
 	# use \sloppy to allow hyphenation without penalties,
 	# suppress \twocolumn and set single line spacing
 	calc "$WIDTH / $RATIO"
 	HEIGHT=$CALC_LAST
-	INSERTION="\\\geometry{margin=${MARGIN}mm, papersize={${WIDTH}mm,${HEIGHT}mm}, offset=0mm}
+	INSERTION="\\\geometry{margin=${MARGIN}mm, papersize={${WIDTH}mm,${HEIGHT}mm}, offset=0mm, twocolumn=false}
 \\\sloppy
 \\\def\\\twocolumn{}
 \\\renewcommand{\\\twocolumn}[1][]{\\\onecolumn #1}
+\\\def\\\twocolumngrid{}
 \\\renewcommand{\\\baselinestretch}{1}
 "
 	# Insert parameters right before \begin{document}
@@ -126,8 +224,11 @@ compile(){
 	# In other cases replace twocolumn by onecolumn
 	perl -pi -0 -e "s/\\\documentclass\[([^]]*)twocolumn([^]]*)\]/\\\documentclass[\$1 onecolumn \$2]/g" "$TEXNAME"
 
-	if (( $USE_BREQN ))
-	then
+	# For revtex4 add option floatfix
+	perl -pi -0 -e "s/\\\documentclass{(revtex4(-1)?)}/\\\documentclass[floatfix]{\$1}/g" "$TEXNAME"
+	perl -pi -0 -e "s/\\\documentclass\[([^]]*)\]{(revtex4(-1)?)}/\\\documentclass[\$1, floatfix]{\$2}/g" "$TEXNAME"
+
+	if (( $USE_BREQN )); then
 		# Add (if not added already) breqn to preambule 
 		if grep -q -E "\\\usepackage(\[[^]]*\])?{[^}]*breqn[^}]*}" "$TEXNAME"
 		then
@@ -147,7 +248,7 @@ compile(){
 	latexmake_pdf $TEXNAME
 	if [ $LATEXMAKE_PDF -eq 0 ]
 	then
-	  echo "direct compilation to pdf success" > /dev/null
+	  echo "direct compilation to pdf succeeded" > /dev/null
 	# or through intermediate PS
 	else
 		latexmake_pdfps $TEXNAME
@@ -199,19 +300,25 @@ OUTPUTDIR=`pwd`
 TMPDIR=`mktemp -d`
 cd $TMPDIR
 
+# Old papers have identifiers like math/0410522,
+# so we must get basename
+OUTPUTFILE=`basename $CODE`
+
 # Download sources
-if curl -o $CODE --compressed http://arxiv.org/e-print/$CODE 
-then
-	echo "curl success" > /dev/null
-else
-	echo "Cannot download http://arxiv.org/e-print/$CODE"
-	exit
-fi
+download "http://arxiv.org/e-print/$CODE" "$OUTPUTFILE"
 
 # Some people does not provide sources of their papers
-if file $CODE | grep -q PDF 
+if file $OUTPUTFILE | grep -q "PDF document"
 then
 	echo "No sources available!"
+	exit 
+fi
+
+# Some sources are HTML 
+# We can do nothing with them
+if file $OUTPUTFILE | grep -q "HTML document"
+then
+	echo "Sources are HTML"
 	exit 
 fi
 
@@ -223,14 +330,17 @@ done
 
 # If there is a single file then simply compile it
 if [ `ls -1A | wc -l` = 1 ]; then
+	# Rename source from $CODE to $CODE.tex
+	mv * $CODE.tex
 	compile *
 # If there are multiple files 
 # then select LaTeX documents and compile them
 else
-	for i in `grep -l "\\\documentclass\|\\\documentstyle" *.tex`; do 
+	for i in `find -iname "*.tex" | xargs grep -E -l "(\\\documentclass|\\\documentstyle)[[{]"`; do 
 		compile $i
+		PDFNAME="${i%.*}.pdf"
+		cp $PDFNAME $OUTPUTDIR
 	done
 fi
 
-cp *.pdf $OUTPUTDIR
 rm -rf $TMPDIR
