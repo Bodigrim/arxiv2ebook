@@ -2,10 +2,14 @@
 # Requires perl
 # Requires one of following: curl, wget, GET, w3m, lynx
 # latexmk is desirable, but not necessary
+# 
+# To-do:
+# Provide meaningful exit codes
+# Check dependencies and warn on errors
 
 # Ratio of the actual viewport
 # Some useful information is available at http://goo.gl/7Yvbc
-RATIO=1.3986 # `echo "800 / 572" | bc -l`
+RATIO=1.3986 # $(echo "800 / 572" | bc -l)
 
 # Minimal width (mm) of the output document
 # If formulas appear to be longer, 
@@ -21,15 +25,9 @@ MARGIN=2
 # Usually two runs are enough to get rid of all horizontal overfulls
 MAX_RUN_NUMBER=2
 
-# Set USE_BREQN=1 to use package "breqn" to hyphen formulas
+# Set USE_BREQN=1 to use package 'breqn' to hyphen formulas
 # This package cause problems in some cases
 USE_BREQN=0
-
-# One can derive the following list of classes by running
-# find -iname "*.cls" | xargs grep -l {geometry} | cut -d "/" -f 3 | cut -d . -f 1 | sort | paste -s -d "|"
-# Additions and fixes are welcome
-CLASSES_WITH_GEOMETRY="achemso|active-conf|agecon|aiaa-tc|ajae|apecon|bookest|ebsthesis|ecca|ecv|elpres|erae|erdc|eskd|estcpmm|flacards|flashcards|gaceta|gmdocc|hpsdiss|icsv|IEEEconf|image-gallery|isodoc|itaxpf|jrurstud|kerntest|lps|macqassign|mentis|nih|oegatb|papertex|pbsheet|pocoec|postcards|powerdot|ppr-prv|recipecard|regstud|sageep|screenplay|sffms|umich-thesis|vxulicentiate|worlddev"
-# Documentclass elsarticle incorporates geometry only if one of the options 1p, 3p or 5p is set
 
 # Current number of runs
 RUN_NUMBER=0
@@ -38,19 +36,20 @@ RUN_NUMBER=0
 # using various tools
 calc(){
 	if which bc; then
-		CALC_LAST=`echo "$1" | bc -l`
+		CALC_LAST=$(echo "$1" | bc -l)
 	elif which awk; then
-		CALC_LAST=`echo - | awk "{print $1}"`
+		CALC_LAST=$(echo - | awk "{print $1}")
 	elif which perl; then
-		CALC_LAST=`echo "print $1" | perl`
+		CALC_LAST=$(echo "print $1" | perl)
 	elif which python; then
-		CALC_LAST=`python -c "print $1"`
+		CALC_LAST=$(python -c "print $1")
 	elif which ruby; then
-		CALC_LAST=`ruby -e "print $1"`
+		CALC_LAST=$(ruby -e "print $1")
 	else 
 		echo "No calculator available: install bc, awk, perl, python or ruby"
-		exit
+		exit 1
 	fi
+	return 0
 	}
 	
 # Download sources using various tools
@@ -58,146 +57,141 @@ download(){
 	URL=$1
 	OUTPUT=$2
 	
-	echo "Downloading $URL to $OUTPUT"
+	echo "Downloading $URL to $OUTPUT" 
 	
-	if which curl; then
-		if curl -o $OUTPUT --compressed $URL 
-		then
+	if which curl && curl -o $OUTPUT --compressed $URL; then
 			echo "curl succeeded" > /dev/null
-		else
-			echo "Cannot download http://arxiv.org/e-print/$CODE"
-			exit
-		fi	
 	else
 		# Check if gunzip available
 		if which gunzip; then
 			echo "gunzip available" > /dev/null
 		else
 			echo "No gunzip available: install curl (preferred) or gunzip"
+			exit 1
 		fi
 		
 		# Download $URL using wget, GET, w3m or lynx
-		if which wget; then
-			USERAGENT="Wget"
-			if wget -U"$USERAGENT" -O - $URL > $OUTPUT.gz
-			then
+		if which wget && wget -U"Wget" -O - $URL > $OUTPUT.gz; then
 				echo "wget succeeded" > /dev/null
-			else
-				echo "Cannot download $URL using wget"
-				exit
-			fi
-		elif which GET; then
-			if GET $URL > $OUTPUT.gz
-			then
+		elif which GET && GET $URL > $OUTPUT.gz; then
 				echo "GET succeeded" > /dev/null
-			else
-				echo "Cannot download $URL using GET"
-				exit
-			fi			
-		elif which w3m; then
-			if w3m -dump_source $URL > $OUTPUT.gz
-			then
+		elif which w3m && w3m -dump_source $URL > $OUTPUT.gz; then
 				echo "w3m succeeded" > /dev/null
-			else
-				echo "Cannot download $URL using w3m"
-				exit
-			fi			
-		elif which lynx; then
-			if lynx -source $URL > $OUTPUT.gz
-			then
+		elif which lynx && lynx -source $URL > $OUTPUT.gz; then
 				echo "lynx succeeded" > /dev/null
-			else
-				echo "Cannot download $URL using lynx"
-				exit
-			fi					
 		else 
 			echo "No downloader available: install curl (preferred), wget, GET, w3m or lynx"
-			exit
+			exit 1
 		fi
 
 		# Unpack sources
-		gunzip -f $CODE.gz		
-		
+		gunzip -f $OUTPUT.gz
 	fi
-	}
- 
-latexmake_pdf(){
-	if which latexmk; then
-		if latexmk -dvi- -ps- -pdf  -bibtex- -silent "$1"; then
-			LATEXMAKE_PDF=0
-		else
-			LATEXMAKE_PDF=1
-		fi
-	else
-		COMMAND="pdflatex -interaction=batchmode "$1""
-		if $COMMAND && $COMMAND && $COMMAND && $COMMAND; then
-			LATEXMAKE_PDF=0
-		else
-			LATEXMAKE_PDF=1
-		fi 
-	fi
+	return 0
 	}
 
-latexmake_pdfps(){
+# Compile directly to pdf
+latexmake_pdf(){
+	TEXNAME=$1
+	# If latexmk is available then use it
 	if which latexmk; then
-		if latexmk -dvi- -ps- -pdfps -bibtex- "$1"; then
-			LATEXMAKE_PDFPS=0
-		else
-			LATEXMAKE_PDFPS=1
-		fi
+		latexmk -dvi- -ps- -pdf  -bibtex- -silent "$TEXNAME"
+	# otherwise run pdflatex 4 times
 	else
-		TEXNAME=$1
+		COMMAND="pdflatex -interaction=batchmode "$TEXNAME""
+		$COMMAND && $COMMAND && $COMMAND && $COMMAND
+	fi
+	return $?
+	}
+
+# Compile to pdf through ps
+latexmake_pdfps(){
+	TEXNAME=$1
+	# If latexmk is available then use it
+	if which latexmk; then
+		latexmk -dvi- -ps- -pdfps -bibtex- "$TEXNAME"
+	# otherwise run latex 4 times, dvips and ps2pdf
+	else
 		DVINAME="${TEXNAME%.*}.dvi"
 		PSNAME="${TEXNAME%.*}.ps"
-
-		COMMAND="latex -interaction=batchmode "$1""
-		if $COMMAND && $COMMAND && $COMMAND && $COMMAND && dvips "$DVINAME" && ps2pdf "$PSNAME"; then
-			LATEXMAKE_PDFPS=0
-		else
-			LATEXMAKE_PDFPS=1
-		fi 
+		
+		COMMAND="latex "$TEXNAME""
+		$COMMAND && $COMMAND && $COMMAND && $COMMAND && dvips "$DVINAME" && ps2pdf "$PSNAME"
 	fi
+	return $?
+	}
+	
+# In fact we do not parse TeX-source, 
+# but just process it with regexps.
+# It is a good idea to strip comments before
+# to do not process commented fragments
+strip_comments(){
+	TEXNAME=$1
+	# Before running regexp to strip comments 
+	# one should change line-endings to Unix-format
+	
+	# Replace DOS line-endings by Unix
+	perl -pi -e 's/\r\n/\n/' "$TEXNAME"
+	# Replace Mac line-endings by Unix
+	perl -pi -e 'tr/\r/\n/' "$TEXNAME"
+	
+	# Strip comments
+	perl -pi -e 's/(?<!\\)%.*/%/g' "$TEXNAME" 
 	}
 
+# Following routine is the heart of processing
+# It prepares sources and runs compilers
 compile(){
-  TEXNAME=$1
-  echo "Compiling $TEXNAME"
-  
-  # Strip comments
-  perl -pi -e 's/(?<!\\)%.*/%/g' "$TEXNAME"
-  
-  # LaTeX 2.09 documents with no options
-  # can be simply converted to LaTeX2e
-  perl -pi -e "s/\\\documentstyle{/\\\documentclass{/g" "$TEXNAME"
+	TEXNAME=$1
+	echo "Compiling $TEXNAME"
+	
+	# Uncomment following line for debug purposes
+	# cp $TEXNAME $TEXNAME.safe
+	
+	# LaTeX 2.09 documents with no options
+	# can be simply converted to LaTeX2e
+	perl -pi -e "s/\\\documentstyle{/\\\documentclass{/g" "$TEXNAME"
 
-	# Add (if not added already) geometry to preambule 
-	if grep -q -E "\\documentclass(\[[^]]*\])?{($CLASSES_WITH_GEOMETRY)}|\\\usepackage(\[[^]]*\])?{[^}]*geometry[^}]*}|\\documentclass\[([^]]*)(1|3|5)p([^]]*)\]{elsarticle}" "$TEXNAME"
-	then
-		echo "geometry has been already included" > /dev/null
+	# One can derive the following list of classes by running
+	# find -iname "*.cls" | xargs grep -l {geometry} | cut -d "/" -f 3 | cut -d . -f 1 | sort | paste -s -d "|"
+	# Additions and fixes are welcome
+	CLASSES_WITH_GEOMETRY="achemso|active-conf|agecon|aiaa-tc|ajae|apecon|bookest|ebsthesis|ecca|ecv|elpres|erae|erdc|eskd|estcpmm|flacards|flashcards|gaceta|gmdocc|hpsdiss|icsv|IEEEconf|image-gallery|isodoc|itaxpf|jrurstud|kerntest|lps|macqassign|mentis|nih|oegatb|papertex|pbsheet|pocoec|postcards|powerdot|ppr-prv|recipecard|regstud|sageep|screenplay|sffms|umich-thesis|vxulicentiate|worlddev"
+	# Documentclass elsarticle incorporates geometry only if one of the options 1p, 3p or 5p is setlength
+
+	# Check if package 'geometry' should be added to the preambule
+	if grep -q -E "\\documentclass(\[[^]]*\])?{($CLASSES_WITH_GEOMETRY)}|\\\usepackage(\[[^]]*\])?{[^}]*geometry[^}]*}|\\documentclass\[([^]]*)(1|3|5)p([^]]*)\]{elsarticle}" "$TEXNAME"; then
+		# Even if geometry is in use
+		# it can have disabling option [pass]
+		# Remove it
+		perl -pi -0 -e "s/\\\usepackage\[([^]]*)pass([^]]*)\]{geometry}/\\\usepackage[\$1 \$2]{geometry}/g" "$TEXNAME"
 	else
+		# Add package 'geometry' to the preambule
 		perl -pi -0 -e "s/\\\begin\{document\}/\\\setlength{\\\paperwidth}{210mm}\\\setlength{\\\paperheight}{297mm}\\\usepackage{geometry}\\\begin{document}/g" "$TEXNAME"
 	fi
-
-	# Long URLs often produce overfulls
-	# If hyperref is used
-	# then add (if not added already) breakurl to preambule 
-	if grep -q -E "\\\usepackage(\[[^]]*\])?{[^}]*breakurl[^}]*}" "$TEXNAME" 
-	then
-		echo "breakurl has been already included" > /dev/null
-	else
-		if grep -q -E "\\\usepackage(\[[^]]*\])?{[^}]*hyperref[^}]*}" "$TEXNAME"; then 
-			perl -pi -0 -e "s/\\\begin\{document\}/\\\usepackage{breakurl}\\\begin{document}/g" "$TEXNAME"
+	
+	# If package 'hyperref' is used 
+	# then long URLs often cause overfulls
+	# Package 'breakurl' is a treatment in such case
+	# Check if 'hyperref' is used
+	if grep -q -E "\\\usepackage(\[[^]]*\])?{[^}]*hyperref[^}]*}" "$TEXNAME"; then 
+		# Check if 'breakurl' is used
+		if grep -q -E "\\\usepackage(\[[^]]*\])?{[^}]*breakurl[^}]*}" "$TEXNAME"; then
+			echo "breakurl has been already included" > /dev/null
 		else
-			echo "hyperref is not used" > /dev/null
+			# Add package 'breakurl' to the preambule
+			perl -pi -0 -e "s/\\\begin\{document\}/\\\usepackage{breakurl}\\\begin{document}/g" "$TEXNAME"
+			# Some options of hyperref conflicts with breakurl
+			perl -pi -0 -e "s/\\\usepackage\[([^]]*)(dvipdfmx|dvipdfm|hypertex)([^]]*)\]{hyperref}/\\\usepackage[\$1 \$3]{hyperref}/g" "$TEXNAME"
 		fi
 	fi
 	
 	# On narrow pages more and more floats occur unprocesses
-	# Let us fix this with morefloats
-	if grep -q -E "\\\usepackage(\[[^]]*\])?{[^}]*morefloats[^}]*}" "$TEXNAME" 
-	then
+	# Let us fix this with package 'morefloats'
+	# Check if 'morefloats' is already included
+	if grep -q -E "\\\usepackage(\[[^]]*\])?{[^}]*morefloats[^}]*}" "$TEXNAME"; then
 		echo "morefloats has been already included" > /dev/null
 	else
+		# Add package 'morefloats' to the preambule
 		perl -pi -0 -e "s/\\\begin\{document\}/\\\usepackage{morefloats}\\\begin{document}/g" "$TEXNAME"
 	fi
 
@@ -212,6 +206,8 @@ compile(){
 \\\renewcommand{\\\twocolumn}[1][]{\\\onecolumn #1}
 \\\def\\\twocolumngrid{}
 \\\renewcommand{\\\baselinestretch}{1}
+\\\def\\\newgeometry#1{}
+\\\def\\\restoregeometry{}
 "
 	# Insert parameters right before \begin{document}
 	perl -pi -0 -e "s/\\\begin\{document\}/$INSERTION\\\begin{document}/g" "$TEXNAME"
@@ -227,11 +223,13 @@ compile(){
 	# For revtex4 add option floatfix
 	perl -pi -0 -e "s/\\\documentclass{(revtex4(-1)?)}/\\\documentclass[floatfix]{\$1}/g" "$TEXNAME"
 	perl -pi -0 -e "s/\\\documentclass\[([^]]*)\]{(revtex4(-1)?)}/\\\documentclass[\$1, floatfix]{\$2}/g" "$TEXNAME"
+	
+	# For JHEP3 require ifpdf to prevent conflict
+	perl -pi -0 -e "s/(\\\documentclass[^{]*{JHEP3})/\\\RequirePackage{ifpdf}\$1/g" "$TEXNAME"
 
 	if (( $USE_BREQN )); then
-		# Add (if not added already) breqn to preambule 
-		if grep -q -E "\\\usepackage(\[[^]]*\])?{[^}]*breqn[^}]*}" "$TEXNAME"
-		then
+		# Add (if not added already) 'breqn' to the preambule 
+		if grep -q -E "\\\usepackage(\[[^]]*\])?{[^}]*breqn[^}]*}" "$TEXNAME"; then
 			echo "breqn has been already included" > /dev/null
 		else
 			perl -pi -0 -e "s/\\\begin\{document\}/\\\usepackage{breqn}\\\begin{document}/g" "$TEXNAME"
@@ -245,23 +243,28 @@ compile(){
 
 	# Depending on graphics format 
 	# try to compile in PDF directly 
-	latexmake_pdf $TEXNAME
-	if [ $LATEXMAKE_PDF -eq 0 ]
-	then
-	  echo "direct compilation to pdf succeeded" > /dev/null
+	if latexmake_pdf $TEXNAME; then
+		echo "direct compilation to pdf succeeded" > /dev/null
 	# or through intermediate PS
 	else
-		latexmake_pdfps $TEXNAME
+		echo "direct compilation to pdf failed" > /dev/null
+		if latexmake_pdfps $TEXNAME; then
+			echo "compilation through ps succeeded" > /dev/null
+		else
+			echo "compilation through ps also failed" > /dev/null
+			exit 1
+		fi
 	fi
 
 	# Increase number of runs
 	RUN_NUMBER=$(($RUN_NUMBER + 1))
 	# If we can run once more
-	if [ "$RUN_NUMBER" -lt "$MAX_RUN_NUMBER" ]
-	then
+	if [ "$RUN_NUMBER" -lt "$MAX_RUN_NUMBER" ]; then
 		# Parse logs to check possible overfulls
 		parselog $TEXNAME
 	fi
+	
+	return 0
 }
 
 parselog(){
@@ -269,74 +272,87 @@ parselog(){
 	LOGNAME="${TEXNAME%.*}.log"
 
 	# If horizontal overfulls exist
-	if grep -q Overfull "$LOGNAME"
-	then 
+	if grep -q Overfull "$LOGNAME"; then 
 		# Select the longest overfull
-		ADDTOWIDTH=`grep Overfull "$LOGNAME" | cut -d "(" -f 2 | cut -d p -f 1 | sort -nr | head -n 1`
+		ADDTOWIDTH=$(grep Overfull "$LOGNAME" | cut -d "(" -f 2 | cut -d p -f 1 | sort -nr | head -n 1)
 		# Calculate new width 
 		calc "$WIDTH + $ADDTOWIDTH / 72 * 25.4"
 		WIDTH=$CALC_LAST
 		# And re-run compile()
 		compile $TEXNAME
-		return
+		return 0
 	fi
 
 	# If vertical overfulls exist
-	if grep -q "Float too large" "$LOGNAME"
-	then 
+	if grep -q "Float too large" "$LOGNAME"; then 
 		# Select the longest overfull
-		ADDTOHEIGHT=`grep "Float too large" *.log | cut -d " " -f 9 | cut -d p -f 1 | sort -nr | head -n 1`
+		ADDTOHEIGHT=$(grep "Float too large" *.log | cut -d " " -f 9 | cut -d p -f 1 | sort -nr | head -n 1)
 		# Calculate new width 
 		calc "$WIDTH + $ADDTOHEIGHT * $RATIO / 72 * 25.4"
 		WIDTH=$CALC_LAST
 		# And re-run compile()
 		compile $TEXNAME
-		return
+		return 0
 	fi
 }
 
 CODE=$1
-OUTPUTDIR=`pwd`
-TMPDIR=`mktemp -d`
+OUTPUTDIR=$(pwd)
+TMPDIR=$(mktemp -d)
 cd $TMPDIR
 
 # Old papers have identifiers like math/0410522,
 # so we must get basename
-OUTPUTFILE=`basename $CODE`
+OUTPUTFILE=$(basename $CODE)
 
 # Download sources
 download "http://arxiv.org/e-print/$CODE" "$OUTPUTFILE"
 
 # Some people does not provide sources of their papers
-if file $OUTPUTFILE | grep -q "PDF document"
-then
+if file $OUTPUTFILE | grep -q "PDF document"; then
 	echo "No sources available!"
-	exit 
+	exit 1
 fi
 
 # Some sources are HTML 
 # We can do nothing with them
-if file $OUTPUTFILE | grep -q "HTML document"
-then
+if file $OUTPUTFILE | grep -q "HTML document"; then
 	echo "Sources are HTML"
-	exit 
+	exit 1
 fi
 
 # If sources consist of several files 
 # they are tarred. Untar them
-for i in `file * | grep "POSIX tar archive" | cut -d : -f 1`; do
+for i in $(file * | grep "POSIX tar archive" | cut -d : -f 1); do
 	tar -xf $i
 done
 
 # If there is a single file then simply compile it
-if [ `ls -1A | wc -l` = 1 ]; then
+if [ $(ls -1A | wc -l) = 1 ]; then
 	# Rename source from $CODE to $CODE.tex
 	mv * $CODE.tex
-	compile *
+	# Strip comments
+	strip_comments $CODE.tex
+	# Rarely sources occur to be plain TeX, non-LaTeX
+	if grep -q -E "(\\\documentclass|\\\documentstyle)[[{]" $CODE.tex; then
+		echo "Sources are LaTeX" > /dev/null
+	else
+		echo "Cannot find documentclass or documentstyle - non-LaTeX sources"
+		exit 1
+	fi
+	compile $CODE.tex
+	cp $CODE.pdf $OUTPUTDIR
 # If there are multiple files 
 # then select LaTeX documents and compile them
 else
-	for i in `find -iname "*.tex" | xargs grep -E -l "(\\\documentclass|\\\documentstyle)[[{]"`; do 
+	# Wrong positivity may be caused by 
+	# commented \documentclass in auxiliary files
+	# So first of all let us strip comments
+	for i in $(find -iname "*.tex" | xargs grep -E -l "(\\\documentclass|\\\documentstyle)[[{]"); do 
+		strip_comments $i
+	done
+	# Now search LaTeX documents again and compile
+	for i in $(find -iname "*.tex" | xargs grep -E -l "(\\\documentclass|\\\documentstyle)[[{]"); do 
 		compile $i
 		PDFNAME="${i%.*}.pdf"
 		cp $PDFNAME $OUTPUTDIR
