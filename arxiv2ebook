@@ -90,15 +90,29 @@ download(){
 	return 0
 	}
 
+# Decide: can we compile directly do pdf
+# or we should use ps first?
+latexmake(){
+	TEXNAME=$1
+	if [ $(find . | xargs file | grep "PostScript" | wc -l) = 0 ]; then 
+		echo "Compile directly to pdf"
+		latexmake_pdf $TEXNAME
+	else 
+		echo "Compile to pdf through ps"
+		latexmake_pdfps $TEXNAME
+	fi
+	return $?
+	}
+
 # Compile directly to pdf
 latexmake_pdf(){
 	TEXNAME=$1
 	# If latexmk is available then use it
 	if which latexmk; then
-		latexmk -dvi- -ps- -pdf  -bibtex- -silent "$TEXNAME"
+		latexmk -dvi- -ps- -pdf  -bibtex- "$TEXNAME"
 	# otherwise run pdflatex 4 times
 	else
-		COMMAND="pdflatex -interaction=batchmode "$TEXNAME""
+		COMMAND="pdflatex "$TEXNAME""
 		$COMMAND && $COMMAND && $COMMAND && $COMMAND
 	fi
 	return $?
@@ -138,6 +152,17 @@ strip_comments(){
 	# Strip comments
 	perl -pi -e 's/(?<!\\)%.*/%/g' "$TEXNAME" 
 	}
+	
+# Convert LaTeX 2.09 documents to LaTeX2e
+convert209(){
+	TEXNAME=$1
+
+	# LaTeX 2.09 documents without options
+	perl -pi -e "s/\\\documentstyle\s*{/\\\documentclass{/g" "$TEXNAME"
+
+	# LaTeX 2.09 documents with options
+	perl -pi -e "s/\\\documentstyle\s*\[([\w,]*)\]\s*{(\w*)}/\\\documentclass{\$2} \\\usepackage{\$1}/g" "$TEXNAME"
+	}
 
 # Following routine is the heart of processing
 # It prepares sources and runs compilers
@@ -148,9 +173,7 @@ compile(){
 	# Uncomment following line for debug purposes
 	# cp $TEXNAME $TEXNAME.safe
 	
-	# LaTeX 2.09 documents with no options
-	# can be simply converted to LaTeX2e
-	perl -pi -e "s/\\\documentstyle{/\\\documentclass{/g" "$TEXNAME"
+	convert209 "$TEXNAME"
 
 	# One can derive the following list of classes by running
 	# find -iname "*.cls" | xargs grep -l {geometry} | cut -d "/" -f 3 | cut -d . -f 1 | sort | paste -s -d "|"
@@ -159,40 +182,40 @@ compile(){
 	# Documentclass elsarticle incorporates geometry only if one of the options 1p, 3p or 5p is setlength
 
 	# Check if package 'geometry' should be added to the preambule
-	if grep -q -E "\\documentclass(\[[^]]*\])?{($CLASSES_WITH_GEOMETRY)}|\\\usepackage(\[[^]]*\])?{[^}]*geometry[^}]*}|\\documentclass\[([^]]*)(1|3|5)p([^]]*)\]{elsarticle}" "$TEXNAME"; then
+	if grep -q -E "\\documentclass\s*(\[[^]]*\])?\s*{($CLASSES_WITH_GEOMETRY)}|\\\usepackage\s*(\[[^]]*\])?\s*{[^}]*geometry[^}]*}|\\documentclass\s*\[([^]]*)(1|3|5)p([^]]*)\]\s*{elsarticle}" "$TEXNAME"; then
 		# Even if geometry is in use
 		# it can have disabling option [pass]
 		# Remove it
-		perl -pi -0 -e "s/\\\usepackage\[([^]]*)pass([^]]*)\]{geometry}/\\\usepackage[\$1 \$2]{geometry}/g" "$TEXNAME"
+		perl -pi -0 -e "s/\\\usepackage\s*\[([^]]*)pass([^]]*)\]\s*{geometry}/\\\usepackage[\$1 \$2]{geometry}/g" "$TEXNAME"
 	else
 		# Add package 'geometry' to the preambule
-		perl -pi -0 -e "s/\\\begin\{document\}/\\\setlength{\\\paperwidth}{210mm}\\\setlength{\\\paperheight}{297mm}\\\usepackage{geometry}\\\begin{document}/g" "$TEXNAME"
+		perl -pi -0 -e "s/\\\begin\s*\{document\}/\\\setlength{\\\paperwidth}{210mm}\\\setlength{\\\paperheight}{297mm}\\\usepackage{geometry}\\\begin{document}/g" "$TEXNAME"
 	fi
 	
 	# If package 'hyperref' is used 
 	# then long URLs often cause overfulls
 	# Package 'breakurl' is a treatment in such case
 	# Check if 'hyperref' is used
-	if grep -q -E "\\\usepackage(\[[^]]*\])?{[^}]*hyperref[^}]*}" "$TEXNAME"; then 
+	if grep -q -E "\\\usepackage\s*(\[[^]]*\])?\s*{[^}]*hyperref[^}]*}" "$TEXNAME"; then 
 		# Check if 'breakurl' is used
-		if grep -q -E "\\\usepackage(\[[^]]*\])?{[^}]*breakurl[^}]*}" "$TEXNAME"; then
+		if grep -q -E "\\\usepackage\s*(\[[^]]*\])?\s*{[^}]*breakurl[^}]*}" "$TEXNAME"; then
 			echo "breakurl has been already included" > /dev/null
 		else
 			# Add package 'breakurl' to the preambule
-			perl -pi -0 -e "s/\\\begin\{document\}/\\\usepackage{breakurl}\\\begin{document}/g" "$TEXNAME"
+			perl -pi -0 -e "s/\\\begin\s*\{document\}/\\\usepackage{breakurl}\\\begin{document}/g" "$TEXNAME"
 			# Some options of hyperref conflicts with breakurl
-			perl -pi -0 -e "s/\\\usepackage\[([^]]*)(dvipdfmx|dvipdfm|hypertex)([^]]*)\]{hyperref}/\\\usepackage[\$1 \$3]{hyperref}/g" "$TEXNAME"
+			perl -pi -0 -e "s/\\\usepackage\s*\[([^]]*)(dvipdfmx|dvipdfm|hypertex)(?=\W)([^]]*)\]\s*{hyperref}/\\\usepackage[\$1 \$3]{hyperref}/g" "$TEXNAME"
 		fi
 	fi
 	
 	# On narrow pages more and more floats occur unprocesses
 	# Let us fix this with package 'morefloats'
 	# Check if 'morefloats' is already included
-	if grep -q -E "\\\usepackage(\[[^]]*\])?{[^}]*morefloats[^}]*}" "$TEXNAME"; then
+	if grep -q -E "\\\usepackage\s*(\[[^]]*\])?\s*{[^}]*morefloats[^}]*}" "$TEXNAME"; then
 		echo "morefloats has been already included" > /dev/null
 	else
 		# Add package 'morefloats' to the preambule
-		perl -pi -0 -e "s/\\\begin\{document\}/\\\usepackage{morefloats}\\\begin{document}/g" "$TEXNAME"
+		perl -pi -0 -e "s/\\\begin\s*\{document\}/\\\usepackage{morefloats}\\\begin{document}/g" "$TEXNAME"
 	fi
 
 	# Set up required page's geometry, 
@@ -210,50 +233,47 @@ compile(){
 \\\def\\\restoregeometry{}
 "
 	# Insert parameters right before \begin{document}
-	perl -pi -0 -e "s/\\\begin\{document\}/$INSERTION\\\begin{document}/g" "$TEXNAME"
+	perl -pi -0 -e "s/\\\begin\s*\{document\}/$INSERTION\\\begin{document}/g" "$TEXNAME"
 
 	# Remove documentclass option "twocolumn"
 	# For elsarticle replace "3p" or "5p" by "1p"
-	perl -pi -0 -e "s/\\\documentclass\[([^]]*)(3|5)p([^]]*)\]{elsarticle}/\\\documentclass[\$1 1p \$3]{elsarticle}/g" "$TEXNAME"
+	perl -pi -0 -e "s/\\\documentclass\s*\[([^]]*)(3|5)p([^]]*)\]\s*{elsarticle}/\\\documentclass[\$1 1p \$3]{elsarticle}/g" "$TEXNAME"
 	# For revtex4-1 replace "reprint" or "twocolumn" by "preprint"
-	perl -pi -0 -e "s/\\\documentclass\[((?:[^]]*[^a-z])?)(reprint|twocolumn)([^]]*)\]{revtex4-1}/\\\documentclass[\$1 preprint \$3]{revtex4-1}/g" "$TEXNAME"
+	perl -pi -0 -e "s/\\\documentclass\s*\[((?:[^]]*[^a-z])?)(reprint|twocolumn)([^]]*)\]\s*{revtex4-1}/\\\documentclass[\$1 preprint \$3]{revtex4-1}/g" "$TEXNAME"
 	# In other cases replace twocolumn by onecolumn
-	perl -pi -0 -e "s/\\\documentclass\[([^]]*)twocolumn([^]]*)\]/\\\documentclass[\$1 onecolumn \$2]/g" "$TEXNAME"
+	perl -pi -0 -e "s/\\\documentclass\s*\[([^]]*)twocolumn([^]]*)\]/\\\documentclass[\$1 onecolumn \$2]/g" "$TEXNAME"
 
 	# For revtex4 add option floatfix
-	perl -pi -0 -e "s/\\\documentclass{(revtex4(-1)?)}/\\\documentclass[floatfix]{\$1}/g" "$TEXNAME"
-	perl -pi -0 -e "s/\\\documentclass\[([^]]*)\]{(revtex4(-1)?)}/\\\documentclass[\$1, floatfix]{\$2}/g" "$TEXNAME"
+	perl -pi -0 -e "s/\\\documentclass\s*{(revtex4(-1)?)}/\\\documentclass[floatfix]{\$1}/g" "$TEXNAME"
+	perl -pi -0 -e "s/\\\documentclass\s*\[([^]]*)\]\s*{(revtex4(-1)?)}/\\\documentclass[\$1, floatfix]{\$2}/g" "$TEXNAME"
 	
-	# For JHEP3 require ifpdf to prevent conflict
-	perl -pi -0 -e "s/(\\\documentclass[^{]*{JHEP3})/\\\RequirePackage{ifpdf}\$1/g" "$TEXNAME"
+	# For revtex4-1 remove option paper,
+	# which conflicts with geometry
+	perl -pi -0 -e "s/\\\documentclass\s*\[((?:[^]]*[^a-z])?)paper([^]]*)\]\s*{revtex4-1}/\\\documentclass[\$1\$2]{revtex4-1}/g" "$TEXNAME"
+
+	# For JHEP3 and PoS require ifpdf to prevent conflict
+	perl -pi -0 -e "s/(\\\documentclass\s*[^{]*{(JHEP3|PoS)})/\\\RequirePackage{ifpdf}\$1/g" "$TEXNAME"
 
 	if (( $USE_BREQN )); then
 		# Add (if not added already) 'breqn' to the preambule 
-		if grep -q -E "\\\usepackage(\[[^]]*\])?{[^}]*breqn[^}]*}" "$TEXNAME"; then
+		if grep -q -E "\\\usepackage\s*(\[[^]]*\])?\s*{[^}]*breqn[^}]*}" "$TEXNAME"; then
 			echo "breqn has been already included" > /dev/null
 		else
-			perl -pi -0 -e "s/\\\begin\{document\}/\\\usepackage{breqn}\\\begin{document}/g" "$TEXNAME"
+			perl -pi -0 -e "s/\\\begin\s*\{document\}/\\\usepackage{breqn}\\\begin{document}/g" "$TEXNAME"
 		fi
 		# Replace equation by dmath
-		perl -pi -0 -e "s/\\\begin\{equation\}/\\\begin{dmath}/g" "$TEXNAME"
-		perl -pi -0 -e "s/\\\end\{equation\}/\\\end{dmath}/g" "$TEXNAME"
-		perl -pi -0 -e "s/\\\begin\{equation\*\}/\\\begin{dmath*}/g" "$TEXNAME"
-		perl -pi -0 -e "s/\\\end\{equation\*\}/\\\end{dmath*}/g" "$TEXNAME"
+		perl -pi -0 -e "s/\\\begin\s*\{equation\}/\\\begin{dmath}/g" "$TEXNAME"
+		perl -pi -0 -e "s/\\\end\s*\{equation\}/\\\end{dmath}/g" "$TEXNAME"
+		perl -pi -0 -e "s/\\\begin\s*\{equation\*\}/\\\begin{dmath*}/g" "$TEXNAME"
+		perl -pi -0 -e "s/\\\end\s*\{equation\*\}/\\\end{dmath*}/g" "$TEXNAME"
 	fi
 
-	# Depending on graphics format 
-	# try to compile in PDF directly 
-	if latexmake_pdf $TEXNAME; then
-		echo "direct compilation to pdf succeeded" > /dev/null
-	# or through intermediate PS
+	# Try to compile 
+	if latexmake $TEXNAME; then
+		echo "compilation succeeded" > /dev/null
 	else
-		echo "direct compilation to pdf failed" > /dev/null
-		if latexmake_pdfps $TEXNAME; then
-			echo "compilation through ps succeeded" > /dev/null
-		else
-			echo "compilation through ps also failed" > /dev/null
-			exit 1
-		fi
+		echo "compilation failed" > /dev/null
+		exit 1
 	fi
 
 	# Increase number of runs
@@ -296,6 +316,22 @@ parselog(){
 	fi
 }
 
+plaintexheader(){
+	cat <<STOP
+\documentclass{article}
+
+\usepackage{plain}
+
+\makeatletter
+\newif\ifus@ \newif\if@cr
+\makeatother
+
+\begin{document}
+\begin{plain}
+
+STOP
+	}
+
 CODE=$1
 OUTPUTDIR=$(pwd)
 TMPDIR=$(mktemp -d)
@@ -324,35 +360,45 @@ fi
 # If sources consist of several files 
 # they are tarred. Untar them
 for i in $(file * | grep "POSIX tar archive" | cut -d : -f 1); do
+	echo "Sources are TAR"
 	tar -xf $i
 done
 
 # If there is a single file then simply compile it
 if [ $(ls -1A | wc -l) = 1 ]; then
+	echo "Single source file found"
 	# Rename source from $CODE to $CODE.tex
 	mv * $CODE.tex
 	# Strip comments
 	strip_comments $CODE.tex
 	# Rarely sources occur to be plain TeX, non-LaTeX
-	if grep -q -E "(\\\documentclass|\\\documentstyle)[[{]" $CODE.tex; then
+	if grep -q -E "(\\\documentclass|\\\documentstyle)\s*[[{]" $CODE.tex; then
 		echo "Sources are LaTeX" > /dev/null
 	else
-		echo "Cannot find documentclass or documentstyle - non-LaTeX sources"
-		exit 1
+		echo "Cannot find documentclass or documentstyle - non-LaTeX sources. Trying to convert automatically."
+		TMPFILE=$(mktemp)
+		
+		plaintexheader >> $TMPFILE
+		cat $CODE.tex >> $TMPFILE
+		echo "\end{plain}\end{document}" >> $TMPFILE
+		mv $TMPFILE $CODE.tex
 	fi
+
 	compile $CODE.tex
 	cp $CODE.pdf $OUTPUTDIR
 # If there are multiple files 
 # then select LaTeX documents and compile them
 else
+	echo "Multiple source files are found"
 	# Wrong positivity may be caused by 
 	# commented \documentclass in auxiliary files
 	# So first of all let us strip comments
-	for i in $(find -iname "*.tex" | xargs grep -E -l "(\\\documentclass|\\\documentstyle)[[{]"); do 
+	for i in $(find -iname "*.tex" -print0 | xargs -0 grep -E -l "(\\\documentclass|\\\documentstyle)\s*[[{]"); do 
 		strip_comments $i
 	done
+
 	# Now search LaTeX documents again and compile
-	for i in $(find -iname "*.tex" | xargs grep -E -l "(\\\documentclass|\\\documentstyle)[[{]"); do 
+	for i in $(find -iname "*.tex" -print0 | xargs -0 grep -E -l "(\\\documentclass|\\\documentstyle)\s*[[{]"); do 
 		compile $i
 		PDFNAME="${i%.*}.pdf"
 		cp $PDFNAME $OUTPUTDIR
